@@ -47,6 +47,41 @@ To try it: `python examples/demo_upstream.py http 9000` in one terminal, then
 | `describe_tool(server, tool)` | full JSON schema |
 | `call_tool(server, tool, arguments)` | run it |
 | `restart_server(server)` | drop cached connection / kill stdio process |
+| `forward(server, tools, enable)` | expose upstream tools directly as router tools (see below) |
+
+## Forwarding: call upstream tools directly
+By default every upstream call is `call_tool(server, tool, arguments)`, preceded by a
+`describe_tool` round trip to learn the schema. *Forwarding* registers chosen upstream tools on
+the router under their real names and schemas, so a client calls e.g. `run_command(command=...)`
+directly. Only what you forward costs context; the router itself stays at its 6 meta-tools.
+
+**Static**, in `servers.json` (applied when the router starts, and on `forward()` with no arguments):
+
+    "sandbox": {
+      "url": "http://127.0.0.1:8767/mcp",
+      "expose": ["run_command", "read_file", "write_file", "edit_file", "sandbox_create"],
+      "prefix": "sbx_",
+      "deny_tools": ["image_*", "sandbox_info", "sandbox_extend"]
+    }
+
+`expose` is a list of globs. `prefix` is optional (default none). If a name would clash with a
+router tool or another server's tool, it falls back to `<server>_<tool>`. `deny_tools` /
+`allow_tools` still win: a denied tool is never forwarded.
+
+**Dynamic**: `forward(server="sandbox", tools=["run_command", "read_*"])` adds them,
+`enable=false` removes them again, and `forward()` with no arguments re-syncs from
+`servers.json` and lists what is forwarded. Dynamic choices live in memory only (lost on router
+restart); tools set by `expose` can't be switched off with `forward`, edit `servers.json`.
+
+**Client support:** the router sends `tools/list_changed` after `forward()` changes anything, but
+whether a client picks that up mid-conversation is up to the client. If the new tools don't show up,
+reconnect the connector, or use static `expose`, which works with any client. Forwarded tools use
+the upstream's description and input schema; upstream output schemas are not forwarded (results
+come back as text, like `call_tool`). Tested with fastmcp 4.1.x.
+
+Tests: `python -m pytest tests -q` (in-memory, uses `demo_upstream.py`), and
+`python tests/smoke_http.py` (starts the real router over HTTP). The `CancelledError`
+traceback the router prints on SIGTERM is not from forwarding; the original code does it too.
 
 ## Notes
 - Entries can set `"transport": "sse"` for legacy SSE servers (the CLI does this for you).
