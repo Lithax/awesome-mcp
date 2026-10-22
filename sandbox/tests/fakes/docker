@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""A tiny fake `docker` CLI for tests. State lives in $FAKE_DOCKER_DIR. `exec` runs the command locally."""
+import json, os, sys
+
+D = os.environ["FAKE_DOCKER_DIR"]
+os.makedirs(D, exist_ok=True)
+a = sys.argv[1:]
+
+def path(n): return os.path.join(D, "c_" + n + ".json")
+def load(n):
+    try:
+        return json.load(open(path(n)))
+    except FileNotFoundError:
+        sys.stderr.write(f"Error: No such container: {n}\n"); sys.exit(1)
+def save(n, c): json.dump(c, open(path(n), "w"))
+def log(): open(os.path.join(D, "calls.log"), "a").write(json.dumps(a) + "\n")
+log()
+cmd = a[0] if a else ""
+if cmd == "version":
+    print("99.0.0-fake")
+elif cmd == "create":
+    name = a[a.index("--name") + 1]
+    if os.path.exists(path(name)):
+        sys.stderr.write("Error: Conflict. The container name is already in use\n"); sys.exit(1)
+    img = None
+    # image is the arg before "-c" after --entrypoint sh
+    i = a.index("--entrypoint"); img = a[i + 2]
+    env = []
+    if "--env-file" in a:
+        env = open(a[a.index("--env-file") + 1]).read().splitlines()
+    if img.startswith("missing"):
+        sys.stderr.write("Unable to find image locally\n"); sys.exit(125)
+    save(name, {"args": a, "state": "created", "env": env})
+    print("f" * 64)
+elif cmd == "start":
+    c = load(a[1]); c["state"] = "running"; save(a[1], c)
+elif cmd == "stop":
+    n = a[-1]; c = load(n); c["state"] = "exited"; save(n, c)
+elif cmd == "rm":
+    n = a[-1]; load(n); os.unlink(path(n))
+elif cmd == "inspect":
+    n = a[-1]; c = load(n)
+    if "-f" in a: print(c["state"])
+    else: print(json.dumps([{"State": {"Status": c["state"], "StartedAt": "now"},
+                              "NetworkSettings": {"Networks": {"bridge": {"IPAddress": "172.17.0.9"}}}}]))
+elif cmd == "stats":
+    print("cpu=0.1% mem=1MiB / 1GiB pids=1")
+elif cmd == "exec":
+    rest = a[1:]
+    while rest[0].startswith("-"): rest = rest[1:]
+    name, argv = rest[0], rest[1:]
+    c = load(name)
+    if c["state"] != "running":
+        sys.stderr.write(f"Error response from daemon: container {name} is not running\n"); sys.exit(1)
+    env = dict(os.environ)
+    for e in c["env"]:
+        k, _, v = e.partition("="); env[k] = v
+    os.execvpe(argv[0], argv, env)
+elif cmd == "pull":
+    if a[1].startswith("missing"):
+        sys.stderr.write("manifest unknown\n"); sys.exit(1)
+    print("pulled")
+elif cmd == "image" and a[1] == "ls":
+    print(json.dumps({"Repository": "debian", "Tag": "12-slim", "ID": "abc", "Size": "74MB", "CreatedSince": "2 weeks ago"}))
+    print(json.dumps({"Repository": "secretcorp/internal", "Tag": "1", "ID": "def", "Size": "1GB", "CreatedSince": "1 day ago"}))
+elif cmd == "rmi":
+    pass
+else:
+    sys.stderr.write("fake docker: unsupported " + " ".join(a) + "\n"); sys.exit(2)

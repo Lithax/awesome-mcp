@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Fake classic LXC tools (dispatch on argv[0]). State in $FAKE_LXC_DIR; attach runs the command locally."""
+import json, os, sys
+
+D = os.environ["FAKE_LXC_DIR"]
+os.makedirs(D, exist_ok=True)
+tool = os.path.basename(sys.argv[1])
+a = sys.argv[2:]
+open(os.path.join(D, "calls.log"), "a").write(json.dumps([tool] + a) + "\n")
+
+def opt(flag, default=None):
+    return a[a.index(flag) + 1] if flag in a else default
+def path(n): return os.path.join(D, "c_" + n + ".json")
+def load(n):
+    try: return json.load(open(path(n)))
+    except FileNotFoundError:
+        sys.stderr.write(f"{n} does not exist\n"); sys.exit(1)
+name = opt("-n")
+
+if tool == "lxc-create":
+    if "--list" in a:
+        print("---\nDIST\tRELEASE\tARCH\tVARIANT\tBUILD\n---")
+        print("debian\tbookworm\tamd64\tdefault\t20240101_05:24")
+        print("alpine\t3.19\tamd64\tdefault\t20240101_13:00")
+        print("evil\tdistro\tamd64\tdefault\t20240101_13:00")
+        sys.exit(0)
+    if os.path.exists(path(name)):
+        sys.stderr.write("Container already exists\n"); sys.exit(1)
+    conf = open(opt("-f")).read()
+    json.dump({"conf": conf, "state": "STOPPED"}, open(path(name), "w"))
+elif tool == "lxc-start":
+    c = load(name); c["state"] = "RUNNING"; json.dump(c, open(path(name), "w"))
+elif tool == "lxc-wait":
+    load(name)
+elif tool == "lxc-stop":
+    c = load(name); c["state"] = "STOPPED"; json.dump(c, open(path(name), "w"))
+elif tool == "lxc-destroy":
+    load(name); os.unlink(path(name))
+elif tool == "lxc-info":
+    c = load(name)
+    print(c["state"] if "-s" in a else "10.0.3.55")
+elif tool == "lxc-attach":
+    c = load(name)
+    if c["state"] != "RUNNING":
+        sys.stderr.write(f"lxc-attach: {name}: Failed to get init pid\n"); sys.exit(1)
+    argv = a[a.index("--") + 1:]
+    env = {"PATH": os.environ["PATH"]}
+    for line in c["conf"].splitlines():
+        if line.startswith("lxc.environment = "):
+            k, _, v = line[len("lxc.environment = "):].partition("="); env[k] = v
+    os.execvpe(argv[0], argv, env)
+else:
+    sys.exit(2)
